@@ -2,7 +2,9 @@
 {-# LANGUAGE FlexibleInstances    #-}
 {-# LANGUAGE LambdaCase           #-}
 {-# LANGUAGE OverloadedStrings    #-}
+{-# LANGUAGE RecursiveDo          #-}
 {-# LANGUAGE ScopedTypeVariables  #-}
+{-# LANGUAGE TemplateHaskell      #-}
 {-# LANGUAGE TypeFamilies         #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE ViewPatterns         #-}
@@ -31,16 +33,59 @@ import           Lib
 ------------------------------------------------------------------------------
 
 
-main :: IO ()
-main = appMain "approot" gameWidget
+data SquareStatus = SquareMerged | SquareNew
+  deriving (Eq,Ord,Show,Read)
+
+data Square = Square
+    { _squareNumber :: Maybe (Sum Int)
+    , _squareStatus :: Maybe SquareStatus
+    } deriving (Eq,Ord,Show,Read)
+
+makeLenses ''Square
+
+instance Default Square where
+    def = Square Nothing Nothing
+
+mergeSquares :: Square -> Square -> Square
+mergeSquares a b  = Square (_squareNumber a <> _squareNumber b) (Just SquareMerged)
+
+data Board = Board
+    { _boardSquares :: L.M44 Square
+    , _boardScore   :: Int
+    } deriving (Eq,Ord,Show,Read)
+
+makeLenses ''Board
+
+instance Default Board where
+  def = Board (L.V4 naught naught naught naught) 0
+    where naught = L.V4 def def def def
+
+data Move = MoveUp | MoveDown | MoveLeft | MoveRight
+  deriving (Eq,Ord,Show,Read)
 
 initBoard :: Board
-initBoard = def & _y . _y .~ Just (Sum 2)
-                & _w . _z .~ Just (Sum 2)
+initBoard = def & boardSquares . _y . _y .~ square2
+                & boardSquares . _w . _z .~ square2
+
+square2 :: Square
+square2 = Square (Just (Sum 2)) Nothing
+
+clearStatus :: Board -> Board
+clearStatus = boardSquares . each . each . squareStatus .~ Nothing
+
+updateScore :: Board -> Board
+updateScore b = b & boardScore %~ (+newPoints)
+  where
+    isMerged s = _squareStatus s == Just SquareMerged
+    newPoints =
+      sum $ map (maybe 0 getSum . _squareNumber)
+          $ filter isMerged $ concat $ toList
+          $ fmap (toList) $ _boardSquares b
 
 addNumber :: (Int,Int) -> Board -> Board
-addNumber (i,j) b = b & (indToLens i) . (indToLens j) .~ Just (Sum 2)
+addNumber (i,j) b = b & boardSquares . (indToLens i) . (indToLens j) .~ s2
   where
+    s2 = Square (Just (Sum 2)) (Just SquareNew)
     indToLens 0 = _x
     indToLens 1 = _y
     indToLens 2 = _z
@@ -49,10 +94,12 @@ addNumber (i,j) b = b & (indToLens i) . (indToLens j) .~ Just (Sum 2)
 
 
 procKeyPress :: (KeyEvent, Double) -> Board -> Board
-procKeyPress (ke,r) b = if b2 == b then b else addNumber newSquare b2
+procKeyPress (ke,r) b = updateScore b3
   where
     newSquare = emptySquares !! (floor $ r * fromIntegral (length emptySquares))
-    b2 = next b
+    b1 = clearStatus b
+    b2 = next b1
+    b3 = if b2 == b1 then b1 else addNumber newSquare b2
     emptySquares = getEmptyInds b2
     next = case keKeyCode ke of
              37 -> mkMove MoveLeft
@@ -70,39 +117,44 @@ addRandomVal rng e = performEvent (add <$> e)
 
 gameWidget :: MonadWidget t m => App t m ()
 gameWidget = do
-  rng <- liftIO mkRNG
-  putDebugLn "in gameWidget"
-  kp <- asks bsKeyDown
-  putDebugLnE kp (show . keKeyCode)
-  kpWithRand <- addRandomVal rng kp
-  b <- foldDyn ($) initBoard (procKeyPress <$> kpWithRand)
-  elAttr "link" ("href" =: "css/main.css" <>
-                 "rel" =: "stylesheet" <>
-                 "type" =: "text/css"
-                ) $ return ()
-  divClass "container" $ do
-    divClass "heading" $ do
-      elClass "h1" "title" $ elAttr "a" ("href" =: "/") $ text "2048"
-      divClass "scores-container" $ do
-        divClass "score-container" $ do
-          text "0"
-          divClass "score-addition" $ text "+4"
-        divClass "best-container" $ text "0"
-    divClass "heading" $ do
-      elClass "a" "restart-button" $ text "New Game"
-      elClass "h2" "subtitle" $ do
-        text "Play "
-        el "strong" $ text "2048 Game"
-        text " Online"
-      divClass "above-game" $ el "p" $ do
-        text "Join the numbers and get to the "
-        el "strong" $ text "2048 tile!"
-    divClass "game-container" $ do
-      divClass "game-message" $ return ()
-      divClass "grid-container" $ do
-        replicateM_ 4 row
-      _ <- widgetHoldHelper boardWidget initBoard (updated b)
-      return ()
+    rng <- liftIO mkRNG
+    kp <- asks bsKeyDown
+    kpWithRand <- addRandomVal rng kp
+    rec b <- foldDyn ($) initBoard $ leftmost
+               [ procKeyPress <$> kpWithRand
+               , const initBoard <$ newGame
+               ]
+        elAttr "link" ("href" =: "css/main.css" <>
+                       "rel" =: "stylesheet" <>
+                       "type" =: "text/css"
+                      ) $ return ()
+        newGame <- divClass "container" $ do
+          divClass "heading" $ do
+            elClass "h1" "title" $ elAttr "a" ("href" =: "/") $ text "2048"
+            divClass "scores-container" $ do
+              divClass "score-container" $ do
+                display $ _boardScore <$> b
+                divClass "score-addition" $ text "+4"
+              divClass "best-container" $ text "0"
+          restart <- divClass "heading" $ do
+            (buttonEl,_) <- elClass' "a" "restart-button" $ text "New Game"
+            elClass "h2" "subtitle" $ do
+              text "Play "
+              el "strong" $ text "2048 Game"
+              text " Online"
+            divClass "above-game" $ el "p" $ do
+              text "Join the numbers and get to the "
+              el "strong" $ text "2048 tile!"
+            return $ domEvent Click buttonEl
+          divClass "game-container" $ do
+            divClass "game-message" $ return ()
+            divClass "grid-container" $ do
+              replicateM_ 4 row
+            _ <- widgetHoldHelper boardWidget initBoard (updated b)
+            return ()
+          return restart
+        return ()
+    return ()
   where
     row = divClass "grid-row" $ replicateM_ 4 cell
     cell = divClass "grid-cell" $ return ()
@@ -110,50 +162,47 @@ gameWidget = do
 boardWidget :: MonadWidget t m => Board -> m ()
 boardWidget b = do
     divClass "tile-container" $ do
-      void $ itraverse lineWidget $ toList b
+      void $ itraverse lineWidget $ toList $ _boardSquares b
 
-lineWidget :: MonadWidget t m => Int -> L.V4 (Maybe (Sum Integer)) -> m ()
+lineWidget :: MonadWidget t m => Int -> L.V4 Square -> m ()
 lineWidget i a = void $ itraverse (cellWidget i) $ toList a
 
-cellWidget :: MonadWidget t m => Int -> Int -> Maybe (Sum Integer) -> m ()
-cellWidget _ _ Nothing = return ()
-cellWidget i j (Just v) = do
-    divClass cls $
-      divClass "tile-inner" $ text $ tshow (getSum v)
+cellWidget :: MonadWidget t m => Int -> Int -> Square -> m ()
+cellWidget i j s =
+    case _squareNumber s of
+      Nothing -> return ()
+      Just v -> do
+        let cls = addNewOrMerged $ T.unwords
+                    [ "tile"
+                    , "tile-" <> tshow (getSum v)
+                    , T.intercalate "-" ["tile-position", tshow (j+1), tshow (i+1)]
+                    ]
+        divClass cls $ divClass "tile-inner" $ text $ tshow (getSum v)
   where
-    cls = T.unwords
-            [ "tile"
-            , "tile-" <> tshow (getSum v)
-            , T.intercalate "-" ["tile-position", tshow (j+1), tshow (i+1)]
-            ]
+    addNewOrMerged = case _squareStatus s of
+                       Nothing -> id
+                       Just SquareMerged -> (<> " tile-merged")
+                       Just SquareNew -> (<> " tile-new")
 
 tshow :: Show a => a -> Text
 tshow = T.pack . show
 
-type Board = L.M44 (Maybe (Sum Integer))
-
-instance Default Board where
-  def = L.V4 naught naught naught naught
-    where naught = L.V4 Nothing Nothing Nothing Nothing
-
-data Move = MoveUp | MoveDown | MoveLeft | MoveRight
-  deriving (Eq,Ord,Show,Read)
-
 mkMove :: Move -> Board -> Board
-mkMove MoveUp = cols %~ mergeLine
-mkMove MoveDown = locs %~ mergeLine
-mkMove MoveLeft = rows %~ mergeLine
-mkMove MoveRight = wors %~ mergeLine
+mkMove MoveUp = over boardSquares (cols %~ mergeLine)
+mkMove MoveDown = over boardSquares (locs %~ mergeLine)
+mkMove MoveLeft = over boardSquares (rows %~ mergeLine)
+mkMove MoveRight = over boardSquares (wors %~ mergeLine)
 
 instance Reversing (L.V4 a) where
   reversing v = L.V4 (v ^. _w) (v ^. _z) (v ^. _y) (v ^. _x)
 
-mergeLine :: (Eq a, Monoid a) => [a] -> [a]
-mergeLine (x:x':xs) | x == x' = (x <> x') : mergeLine xs
+mergeLine :: [Square] -> [Square]
+mergeLine (x:x':xs) | _squareNumber x == _squareNumber x' =
+  (mergeSquares x x') : mergeLine xs
 mergeLine (x:xs) = x : mergeLine xs
 mergeLine [] = []
 
-rows, wors, cols, locs :: Traversal' (L.M44 (Maybe  a)) [a]
+rows, wors, cols, locs :: Traversal' (L.M44 Square) [Square]
 rows = traverse . vecList
 wors = traverse . reversed . vecList
 cols = transposed . rows
@@ -162,16 +211,31 @@ locs = transposed . wors
 transposed :: Iso' (L.M44 a) (L.M44 a)
 transposed = iso L.transpose L.transpose
 
-vecList :: Iso' (L.V4 (Maybe a)) [a]
-vecList = iso vecToList vecFromList
-  where
-    vecToList v = reverse $ catMaybes $ foldl (flip (:)) [] v
-    vecFromList (xs :: [a]) = L.V4 (xs^?ix 0) (xs^?ix 1) (xs^?ix 2) (xs^?ix 3)
+isSquareEmpty :: Square -> Bool
+isSquareEmpty (Square Nothing _) = True
+isSquareEmpty _ = False
 
-getEmptyInds :: L.M44 (Maybe a) -> [(Int, Int)]
-getEmptyInds = map dropLast . filter isEmpty . concat . imap f . toList . fmap (toList)
+vecList :: Iso' (L.V4 Square) [Square]
+vecList = iso vecToList vecFromList
+
+vecToList :: L.V4 Square -> [Square]
+vecToList v = reverse $ filter (not . isSquareEmpty) $ foldl (flip (:)) [] v
+
+vecFromList :: [Square] -> L.V4 Square
+vecFromList xs = L.V4 (mk $ xs^?ix 0) (mk $ xs^?ix 1)
+                      (mk $ xs^?ix 2) (mk $ xs^?ix 3)
+  where
+    mk :: Maybe Square -> Square
+    mk = fromMaybe def
+
+getEmptyInds :: Board -> [(Int, Int)]
+getEmptyInds =
+    map dropLast . filter isEmpty . concat . imap f . toList . fmap (toList)
+                 . _boardSquares
   where
     f i = imap (\j a -> (i,j,a))
-    isEmpty (_,_,Nothing) = True
-    isEmpty (_,_,_) = False
+    isEmpty (_,_,s) = isSquareEmpty s
     dropLast (a,b,_) = (a,b)
+
+main :: IO ()
+main = appMain "approot" gameWidget
