@@ -130,10 +130,7 @@ cellWidget i j (Just v) = do
 tshow :: Show a => a -> Text
 tshow = T.pack . show
 
-data Board = Board
-    { boardSquares :: L.M44 (Maybe (Sum Integer))
-    , boardScore   :: Int
-    } deriving (Eq,Ord,Show,Read)
+type Board = L.M44 (Maybe (Sum Integer))
 
 instance Default Board where
   def = L.V4 naught naught naught naught
