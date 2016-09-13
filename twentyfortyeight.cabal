@@ -1,0 +1,29 @@
+name:                twentyfortyeight
+version:             0.1
+homepage:            https://github.com/mightybyte/reflex-2048
+license:             BSD3
+license-file:        LICENSE
+author:              Doug Beardsley
+maintainer:          mightybyte@gmail.com
+category:            Web
+build-type:          Simple
+cabal-version:       >=1.10
+
+executable reflex-2048
+  hs-source-dirs:      src
+  main-is:             Main.hs
+  default-language:    Haskell2010
+  build-depends:       base >= 4.7 && < 5
+                     , boxes
+                     , data-default
+                     , ghcjs-dom
+                     , lens
+                     , linear
+                     , mtl
+                     , reflex
+                     , reflex-dom
+                     , reflex-dom-contrib >= 0.4.2
+                     , rng-utils >= 0.2 && < 0.3
+                     , text
+                     , transformers
+  ghc-options:         -Wall
