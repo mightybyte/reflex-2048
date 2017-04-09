@@ -20,7 +20,6 @@ import           Data.Foldable
 import           Data.Maybe
 import           Data.Monoid
 import           Data.RNG
-import           Data.Text (Text)
 import qualified Data.Text as T
 import           Linear (_w, _x, _y, _z)
 import qualified Linear as L
@@ -183,9 +182,6 @@ cellWidget i j s =
                        Nothing -> id
                        Just SquareMerged -> (<> " tile-merged")
                        Just SquareNew -> (<> " tile-new")
-
-tshow :: Show a => a -> Text
-tshow = T.pack . show
 
 mkMove :: Move -> Board -> Board
 mkMove MoveUp = over boardSquares (cols %~ mergeLine)
